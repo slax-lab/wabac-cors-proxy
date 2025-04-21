@@ -2,35 +2,25 @@ const TS_URL = /([\d]+)id_\/(https?:.*)/;
 
 const cfOpts = {
   scrapeShield: false,
-  cacheTtlByStatus: { "200-299": 3600, "403": 0, "404": 1, "500-599": 0, "300-399": 10 }
+  cacheTtlByStatus: {
+    "200-299": 3600,
+    "403": 0,
+    "404": 1,
+    "500-599": 0,
+    "300-399": 10,
+  },
 };
 
 // set to an array to allow only certain origins, or set to null to allow any origin to connect.
-
-const CORS_ALLOWED_ORIGINS = [
+const CORS_ALLOWED_ORIGINS: string[] | null = [
   "http://localhost:10001",
   "http://localhost:8000",
-  "https://oldweb.today",
-  "https://express.archiveweb.page",
-  "https://webrecorder.github.io",
-  "https://staging.server.reprozip.org",
-  "https://server.reprozip.org",
+  "http://localhost:3000",
+  "https://proxy-test.slax.dev",
 ];
 
-
-
 // ===========================================================================
-try {
-  // Not available when running locally
-  addEventListener("fetch", event => {
-    event.respondWith(handleRequest(event.request));
-  });
-} catch(e) {
-  // ignore?
-}
-
-// ===========================================================================
-async function handleRequest(request) {
+async function handleRequest(request: Request): Promise<Response> {
   const url = request.url.replace(/(https?:\/)([^/])/, "$1/$2");
   const requestURL = new URL(url);
   const requestPath = requestURL.pathname;
@@ -40,7 +30,7 @@ async function handleRequest(request) {
   }
 
   if (requestPath.startsWith("/proxy/")) {
-    const pathWithQuery = url.split(request.headers.get("host"), 2)[1];
+    const pathWithQuery = url.split(request.headers.get("host") || "", 2)[1];
     return handleLiveWebProxy(pathWithQuery.slice("/proxy/".length), request);
   }
 
@@ -48,15 +38,21 @@ async function handleRequest(request) {
 }
 
 // ===========================================================================
-async function handleLiveWebProxy(proxyUrl, request) {
+async function handleLiveWebProxy(
+  proxyUrl: string,
+  request: Request
+): Promise<Response> {
   if (proxyUrl.startsWith("//")) {
     proxyUrl = "https:" + proxyUrl;
   }
 
   const proxyHeaders = new Headers();
   for (const [name, value] of request.headers) {
-    if (name.startsWith("cf-") || name.startsWith("x-pywb-") || 
-      name === "x-proxy-referer") {
+    if (
+      name.startsWith("cf-") ||
+      name.startsWith("x-pywb-") ||
+      name === "x-proxy-referer"
+    ) {
       continue;
     }
     proxyHeaders.set(name, value);
@@ -65,7 +61,7 @@ async function handleLiveWebProxy(proxyUrl, request) {
   //proxyHeaders.delete("x-forwarded-proto");
   const referrer = request.headers.get("x-proxy-referer");
   if (referrer) {
-    proxyHeaders.set("Referer", request.headers.get("x-proxy-referer"));
+    proxyHeaders.set("Referer", request.headers.get("x-proxy-referer") || "");
     const origin = new URL(referrer).origin;
     if (origin !== new URL(proxyUrl).origin) {
       proxyHeaders.set("Origin", origin);
@@ -87,9 +83,15 @@ async function handleLiveWebProxy(proxyUrl, request) {
     proxyHeaders.set("Cookie", cookie);
   }
 
-  const body = request.method === "GET" || request.method === "HEAD" ? null : request.body;
+  const body =
+    request.method === "GET" || request.method === "HEAD" ? null : request.body;
 
-  const resp = await fetchWithRedirCheck(proxyUrl, request.method, proxyHeaders, body);
+  const resp = await fetchWithRedirCheck(
+    proxyUrl,
+    request.method,
+    proxyHeaders,
+    body
+  );
 
   const headers = new Headers(resp.headers);
 
@@ -97,20 +99,20 @@ async function handleLiveWebProxy(proxyUrl, request) {
   if (set_cookie) {
     headers.set("X-Proxy-Set-Cookie", set_cookie);
   }
- 
-  let status;
+
+  let status: number;
   const statusText = resp.statusText;
 
   if ([301, 302, 303, 307, 308].includes(resp.status)) {
-    headers.set("x-redirect-status", resp.status);
+    headers.set("x-redirect-status", resp.status.toString());
     headers.set("x-redirect-statusText", resp.statusText);
     if (resp.headers.get("location")) {
-      headers.set("x-orig-location", resp.headers.get("location"));
-    } else if (resp.location) {
-      headers.set("x-orig-location", resp.location);
+      headers.set("x-orig-location", resp.headers.get("location") || "");
+    } else if ((resp as any).location) {
+      headers.set("x-orig-location", (resp as any).location);
     }
-    if (resp.ts) {
-      headers.set("x-orig-ts", resp.ts);
+    if ((resp as any).ts) {
+      headers.set("x-orig-ts", (resp as any).ts);
     }
     status = 200;
   } else {
@@ -119,19 +121,23 @@ async function handleLiveWebProxy(proxyUrl, request) {
 
   addCORSHeaders(headers, request, resp);
 
-  let respBody;
+  let respBody: ReadableStream<Uint8Array> | string;
 
   if (status >= 400 && !resp.headers.get("memento-datetime")) {
     respBody = `Sorry, this page was not found or could not be loaded: (Error ${status})`;
   } else {
-    respBody = resp.body;
+    respBody = resp.body as ReadableStream<Uint8Array>;
   }
 
-  return new Response(respBody, {headers, status, statusText});
+  return new Response(respBody, { headers, status, statusText });
 }
 
 // ===========================================================================
-function addCORSHeaders(headers, request, resp) {
+function addCORSHeaders(
+  headers: Headers,
+  request: Request,
+  resp: Response
+): void {
   const origin = request.headers.get("Origin");
 
   // no need for CORS headers!
@@ -139,7 +145,13 @@ function addCORSHeaders(headers, request, resp) {
     return;
   }
 
-  const allowHeaders = ["x-redirect-status", "x-redirect-statusText", "X-Proxy-Set-Cookie", "x-orig-location", "x-orig-ts"];
+  const allowHeaders: string[] = [
+    "x-redirect-status",
+    "x-redirect-statusText",
+    "X-Proxy-Set-Cookie",
+    "x-orig-location",
+    "x-orig-ts",
+  ];
 
   headers.set("Access-Control-Allow-Origin", origin);
   headers.set("Access-Control-Allow-Credentials", "true");
@@ -158,15 +170,18 @@ function addCORSHeaders(headers, request, resp) {
   headers.set("Access-Control-Expose-Headers", allowHeaders.join(","));
 }
 
-
 // ===========================================================================
-function handleOptions(request) {
-
+function handleOptions(request: Request): Response {
   const origin = request.headers.get("Origin");
   const method = request.headers.get("Access-Control-Request-Method");
   const headers = request.headers.get("Access-Control-Request-Headers");
 
-  if (CORS_ALLOWED_ORIGINS && CORS_ALLOWED_ORIGINS.length && !CORS_ALLOWED_ORIGINS.includes(origin)) {
+  if (
+    CORS_ALLOWED_ORIGINS &&
+    CORS_ALLOWED_ORIGINS.length &&
+    origin &&
+    !CORS_ALLOWED_ORIGINS.includes(origin)
+  ) {
     return notFound("origin not allowed", 403);
   }
 
@@ -174,9 +189,7 @@ function handleOptions(request) {
 
   // Make sure the necessary headers are present
   // for this to be a valid pre-flight request
-  if (origin !== null &&
-      method !== null && 
-      headers !== null) {
+  if (origin !== null && method !== null && headers !== null) {
     // Handle CORS pre-flight request.
     // If you want to check the requested method + headers
     // you can do that here.
@@ -185,8 +198,8 @@ function handleOptions(request) {
         "Access-Control-Allow-Method": method,
         "Access-Control-Allow-Headers": headers,
         "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Credentials": "true"
-      }
+        "Access-Control-Allow-Credentials": "true",
+      },
     });
   } else {
     // Handle standard OPTIONS request.
@@ -200,8 +213,13 @@ function handleOptions(request) {
 }
 
 // ===========================================================================
-async function fetchWithRedirCheck(url, method, headers, body) {
-  let resp = null;
+async function fetchWithRedirCheck(
+  url: string,
+  method: string,
+  headers: Headers,
+  body: ReadableStream<Uint8Array> | null
+): Promise<Response> {
+  let resp: Response | null = null;
 
   const noHttps = headers.get("X-OWT-No-HTTPS");
   if (noHttps) {
@@ -209,39 +227,38 @@ async function fetchWithRedirCheck(url, method, headers, body) {
   }
 
   while (true) {
-    resp = await fetch(url, {
+    resp = (await fetch(url, {
       method,
       headers,
       body,
-      // for cf worker
       redirect: "manual",
       cf: cfOpts,
-
-      // for node fetch
-      follow: 0,
-      compress: false
-    });
+    })) as Response;
 
     if (resp.status > 300 && resp.status < 400 && resp.status !== 304) {
       const location = resp.headers.get("location");
 
-      const m = location.match(TS_URL);
-      const m2 = url.match(TS_URL);
-      if (m && m2) {
-        if (m[2] === m2[2]) {
+      if (location) {
+        const m = location.match(TS_URL);
+        const m2 = url.match(TS_URL);
+        if (m && m2) {
+          if (m[2] === m2[2]) {
+            url = location;
+            continue;
+          }
+        }
+
+        if (m) {
+          //@ts-ignore
+          resp.location = m[2];
+          //@ts-ignore
+          resp.ts = m[1];
+        }
+
+        if (noHttps && location.startsWith("https://")) {
           url = location;
           continue;
         }
-      }
-
-      if (m) {
-        resp.location = m[2];
-        resp.ts = m[1];
-      }
-
-      if (noHttps && location.startsWith("https://")) {
-        url = location;
-        continue;
       }
     }
 
@@ -252,6 +269,13 @@ async function fetchWithRedirCheck(url, method, headers, body) {
 }
 
 // ===========================================================================
-function notFound(err = "not found", status = 404) {
-  return new Response(JSON.stringify({"error": err}), {status, headers: {"Content-Type": "application/json"}});
+function notFound(err: string = "not found", status: number = 404): Response {
+  return new Response(JSON.stringify({ error: err }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
+
+export default {
+  fetch: handleRequest,
+};
